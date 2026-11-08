@@ -1,0 +1,74 @@
+name: Build LTA Reel Maker - App and VST3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-app:
+    name: Build Windows Reel Maker EXE
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run audio MIDI and renderer tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build EXE with embedded FFmpeg
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name LTA-Reel-Maker --collect-all imageio_ffmpeg Desktop/app.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
+          if (-not (Test-Path 'dist/LTA-Reel-Maker.exe')) { throw 'EXE missing' }
+
+      - name: Upload Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: LTA-Reel-Maker-Windows-App
+          path: dist/LTA-Reel-Maker.exe
+          if-no-files-found: error
+
+  master-vst3:
+    name: Build FL Studio Master Capture VST3
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure JUCE project
+        run: cmake -S Plugin -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target LTAReelCapture_VST3 --parallel 4
+
+      - name: Package complete VST3 folder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vst = @(Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3')
+          if ($vst.Count -ne 1) { throw "Expected one VST3 bundle; found $($vst.Count)" }
+          New-Item -ItemType Directory -Force -Path 'package' | Out-Null
+          Copy-Item -LiteralPath $vst[0].FullName -Destination 'package' -Recurse -Force
+          Compress-Archive -Path 'package/*' -DestinationPath 'LTA-Reel-Capture-Windows-VST3.zip' -Force
+
+      - name: Upload FL Studio VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: LTA-Reel-Capture-Master-VST3
+          path: LTA-Reel-Capture-Windows-VST3.zip
+          if-no-files-found: error
